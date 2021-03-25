@@ -7,6 +7,7 @@ from torchmeta.datasets.omniglot import Omniglot
 from torchmeta.datasets.tieredimagenet import TieredImagenet
 from torchmeta.datasets.tcga import TCGA
 from torchmeta.datasets.pascal5i import Pascal5i
+from torchmeta.datasets.fastdataset import FastCombinationMetaDataset
 
 from torchmeta.datasets import helpers
 

@@ -1,6 +1,6 @@
 import warnings
 
-from torchmeta.datasets import (Omniglot, MiniImagenet, TieredImagenet, CIFARFS,
+from torchmeta.datasets import (FastCombinationMetaDataset, Omniglot, MiniImagenet, TieredImagenet, CIFARFS,
                                 FC100, CUB, DoubleMNIST, TripleMNIST, Pascal5i)
 from torchmeta.transforms import Categorical, ClassSplitter, Rotation, SegmentationPairTransform
 from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor
@@ -32,12 +32,50 @@ def helper_with_default(klass, folder, shots, ways, shuffle=True,
         kwargs['class_augmentations'] = defaults.get('class_augmentations', None)
     if test_shots is None:
         test_shots = shots
+    print(kwargs, klass)
     dataset = klass(folder, num_classes_per_task=ways, **kwargs)
     dataset = ClassSplitter(dataset, shuffle=shuffle,
         num_train_per_class=shots, num_test_per_class=test_shots)
     dataset.seed(seed)
 
     return dataset
+
+
+def fast_dataset_creator(folder, shots, ways, shuffle=True, test_shots=None, **kwargs):
+    """Helper function to create a meta-dataset for the Omniglot dataset.
+
+    Parameters
+    ----------
+    shots : int
+        Number of (training) examples per class in each task. This corresponds
+        to `k` in `k-shot` classification.
+
+    ways : int
+        Number of classes per task. This corresponds to `N` in `N-way`
+        classification.
+
+    shuffle : bool (default: `True`)
+        Shuffle the examples when creating the tasks.
+
+    test_shots : int, optional
+        Number of test examples per class in each task. If `None`, then the
+        number of test examples is equal to the number of training examples per
+        class.
+
+    kwargs
+        Additional arguments passed to the `Omniglot` class.
+
+    See also
+    --------
+    `datasets.Omniglot` : Meta-dataset for the Omniglot dataset.
+    """
+    # defaults = {
+    #     'transform': Compose([Resize(28), ToTensor()]),
+    #     'class_augmentations': [Rotation([90, 180, 270])]
+    # }
+    return helper_with_default(FastCombinationMetaDataset, folder, shots, ways,
+                               shuffle=shuffle, test_shots=test_shots, **kwargs)
+
 
 def omniglot(folder, shots, ways, shuffle=True, test_shots=None,
              seed=None, **kwargs):

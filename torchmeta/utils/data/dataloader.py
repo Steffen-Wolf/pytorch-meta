@@ -1,12 +1,13 @@
 from collections import OrderedDict
 
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, ConcatDataset
 from torch.utils.data.dataloader import default_collate
 from torch.utils.data.dataset import Dataset as TorchDataset
-
+from torchmeta.utils.data.task import ConcatTask
 from torchmeta.utils.data.dataset import CombinationMetaDataset
 from torchmeta.utils.data.sampler import (CombinationSequentialSampler,
-                                          CombinationRandomSampler)
+                                          CombinationRandomSampler,
+                                          MultiCombinationRandomSampler)
 
 class BatchMetaCollate(object):
 
@@ -21,6 +22,7 @@ class BatchMetaCollate(object):
             return OrderedDict([(key, self.collate_task(subtask))
                 for (key, subtask) in task.items()])
         else:
+            print(task, type(task))
             raise NotImplementedError()
 
     def __call__(self, batch):
@@ -43,6 +45,18 @@ class MetaDataLoader(DataLoader):
             else:
                 sampler = CombinationSequentialSampler(dataset)
             shuffle = False
+        elif isinstance(dataset, (list, tuple)):
+            if shuffle:
+                sampler = MultiCombinationRandomSampler(dataset)
+                dataset = ConcatTask(dataset,
+                                     dataset[0].num_classes,
+                                     target_transform=dataset[0].target_transform)
+            else:
+                raise NotImplementedError()
+            shuffle = False
+            # sample combinations within each dataset
+            # assumes indices are concatenated
+            # RandomSampler
 
         super(MetaDataLoader, self).__init__(dataset, batch_size=batch_size,
             shuffle=shuffle, sampler=sampler, batch_sampler=batch_sampler,
