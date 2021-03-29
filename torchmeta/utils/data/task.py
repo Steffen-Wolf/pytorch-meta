@@ -43,7 +43,6 @@ class ConcatTask(Task, ConcatDataset):
         index = tuple(task.index for task in datasets)
         Task.__init__(self, index, num_classes)
         ConcatDataset.__init__(self, datasets)
-        print("Concat Task", datasets)
         for task in self.datasets:
             task.target_transform_append(target_transform)
 

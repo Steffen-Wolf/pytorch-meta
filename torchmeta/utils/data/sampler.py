@@ -42,7 +42,6 @@ class CombinationRandomSampler(RandomSampler):
         num_classes = len(self.data_source.dataset)
         num_classes_per_task = self.data_source.num_classes_per_task
         for _ in combinations(range(num_classes), num_classes_per_task):
-            print(tuple(random.sample(range(num_classes), num_classes_per_task)))
             yield tuple(random.sample(range(num_classes), num_classes_per_task))
 
 
@@ -89,5 +88,4 @@ class MultiCombinationRandomSampler(RandomSampler):
 
             index_range = range(start_index, end_index)
             index_combination = tuple(random.sample(index_range, num_classes_per_task))
-            print(index_combination)
             yield index_combination

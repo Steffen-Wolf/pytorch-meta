@@ -4,6 +4,7 @@ import glob
 import h5py
 from PIL import Image, ImageOps
 import numpy as np
+import zarr
 
 from torchmeta.utils.data import Dataset, ClassDataset, CombinationMetaDataset
 from torchvision.datasets.utils import list_dir, download_url
@@ -25,30 +26,64 @@ class FastCombinationMetaDataset(CombinationMetaDataset):
 
 class FastClassDataset(ClassDataset):
 
-    def __init__(self, folder, meta_train=False, meta_val=False, meta_test=False,
+    def __init__(self, folders, meta_train=False, meta_val=False, meta_test=False,
                  meta_split=None, transform=None,
                  class_augmentations=None):
         super(FastClassDataset, self).__init__(meta_train=meta_train,
             meta_val=meta_val, meta_test=meta_test, meta_split=meta_split)
 
-        self.folder = folder
-        self._num_classes = 20
+        self.folders = folders
+        self.transform = transform
+        self._data = None
+        # trigger the data loading immediately
+        print(len(self.data))
+
 
     def __getitem__(self, index):
         """
         Each item from a `ClassDataset` is 
             a dataset containing examples from the same class.
         """
-        return FastDataset(len(self.folder), index)
+        transform = self.get_transform(index, self.transform)
+        target_transform = self.get_target_transform(index)
+
+        return FastDataset(self.data[index], index,
+                           transform=transform, target_transform=target_transform)
 
     @property
     def num_classes(self):
-        return self._num_classes
+        return len(self.data)
 
     @property
     def data(self):
         if self._data is None:
-            self._data = h5py.File(self.split_filename, 'r')
+            gt_zarr = zarr.open(
+                self.folders["gt_segmentation"][0], "r")
+            gt_key = self.folders["gt_segmentation"][1]
+            gt_segmentation = gt_zarr[gt_key][:]
+
+            emb_zarr = zarr.open(
+                self.folders["embedding"][0], "r")
+            emb_key = self.folders["embedding"][1]
+            emb_segmentation = emb_zarr[emb_key][0]
+
+            x = np.arange(gt_segmentation.shape[-1], dtype=np.float32)
+            y = np.arange(gt_segmentation.shape[-2], dtype=np.float32)
+
+            coords = np.meshgrid(x, y, copy=True)
+            emb_segmentation = np.concatenate([coords[0:1],
+                                               coords[1:2],
+                                               emb_segmentation], axis=0)
+
+            self._data = []
+            for idx in np.unique(gt_segmentation):
+                mask = gt_segmentation == idx
+                if mask.sum() > self.folders["min_samples"]:
+                    instance_embedding = np.transpose(emb_segmentation[:, mask])
+                    instance_embedding = instance_embedding.astype(np.float32)
+                    self._data.append(instance_embedding)
+                else:
+                    print("skipping", idx, mask.sum())
         return self._data
 
     @property
@@ -58,19 +93,26 @@ class FastClassDataset(ClassDataset):
                 self._labels = json.load(f)
         return self._labels
 
-    def close(self):
-        if self._data is not None:
-            self._data.close()
-            self._data = None
 
 class FastDataset(Dataset):
-    def __init__(self, offset, index):
-        self.offset = offset
-        super().__init__(index)
+    def __init__(self, data, target,
+                 transform=None, target_transform=None):
+        super(FastDataset, self).__init__(target, transform=transform,
+                                              target_transform=target_transform)
+        self.target = target
+        self.data = data
+
+    def __len__(self):
+        return len(self.data)
 
     def __getitem__(self, index):
-        print("loading index=",index, self.offset)
-        return (index * np.ones((1, 28, 28)), self.offset)
-        
-    def __len__(self):
-        return 10
+        target = self.target
+        embedding = self.data[index]
+
+        if self.transform is not None:
+            embedding = self.transform(embedding)
+
+        if self.target_transform is not None:
+            target = self.target_transform(target)
+
+        return embedding, target

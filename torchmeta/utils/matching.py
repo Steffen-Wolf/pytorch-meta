@@ -5,7 +5,8 @@ __all__ = [
     'pairwise_cosine_similarity',
     'matching_log_probas',
     'matching_probas',
-    'matching_loss'
+    'matching_loss',
+    'spatial_matching_loss'
 ]
 
 
@@ -43,10 +44,12 @@ def pairwise_cosine_similarity(embeddings1, embeddings2, eps=1e-8):
     sq_norm2 = torch.sum(embeddings2 ** 2, dim=2).unsqueeze(1)
     dot_product = torch.bmm(embeddings1, embeddings2.transpose(1, 2))
     inverse_norm = torch.rsqrt(torch.clamp(sq_norm1 * sq_norm2, min=eps ** 2))
+
     return dot_product * inverse_norm
 
 
-def matching_log_probas(embeddings, targets, test_embeddings, num_classes, eps=1e-8):
+def matching_log_probas(embeddings, targets, test_embeddings, num_classes,
+                        eps=1e-8, similarity_fn=pairwise_cosine_similarity):
     """Computes the log-probability of test samples given the training dataset
     for the matching network [1].
 
@@ -85,7 +88,7 @@ def matching_log_probas(embeddings, targets, test_embeddings, num_classes, eps=1
            Information Processing Systems (pp. 3630-3638) (https://arxiv.org/abs/1606.04080)
     """
     batch_size, num_samples, _ = test_embeddings.shape
-    similarities = pairwise_cosine_similarity(embeddings, test_embeddings, eps=eps)
+    similarities = similarity_fn(embeddings, test_embeddings, eps=eps)
     logsumexp = torch.logsumexp(similarities, dim=1, keepdim=True)
 
     max_similarities, _ = torch.max(similarities, dim=1, keepdim=True)
@@ -199,4 +202,55 @@ def matching_loss(train_embeddings,
                                  test_embeddings,
                                  num_classes,
                                  eps=eps)
+    return F.nll_loss(logits, test_targets, **kwargs)
+
+def spatial_similarity(embeddings1, embeddings2, eps=1e-8, temperature=100.):
+    e0 = embeddings1[:, :, None]
+    e1 = embeddings2[:, None]
+    # print("spatial shaped", embeddings1.shape, embeddings2.shape)
+    distance = (e0 - e1).norm(2, dim=-1)
+    return (-distance.pow(2) / temperature).exp()
+
+def spatial_matching_log_probas(train_spatial_embeddings,
+                                train_semantic_embeddings,
+                                test_spatial_embeddings,
+                                test_semantic_embeddings,
+                                train_targets,
+                                test_targets,
+                                num_classes,
+                                eps=1e-8):
+
+    # semantic similarity
+    semantic_log_probas = matching_log_probas(train_semantic_embeddings,
+                                               train_targets,
+                                               test_semantic_embeddings,
+                                               num_classes)
+    
+    # semantic similarity
+    spatial_log_probas = matching_log_probas(train_spatial_embeddings,
+                                              train_targets,
+                                              test_spatial_embeddings,
+                                              num_classes,
+                                              similarity_fn=spatial_similarity)
+
+    return spatial_log_probas + semantic_log_probas
+
+
+def spatial_matching_loss(train_spatial_embeddings,
+                          train_semantic_embeddings,
+                          test_spatial_embeddings,
+                          test_semantic_embeddings,
+                          train_targets,
+                          test_targets,
+                          num_classes,
+                          eps=1e-8,
+                          **kwargs):
+    logits = spatial_matching_log_probas(train_spatial_embeddings,
+                                         train_semantic_embeddings,
+                                         test_spatial_embeddings,
+                                         test_semantic_embeddings,
+                                         train_targets,
+                                         test_targets,
+                                         num_classes,
+                                         eps=eps)
     return F.nll_loss(logits, test_targets, **kwargs)

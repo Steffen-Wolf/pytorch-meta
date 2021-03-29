@@ -32,7 +32,7 @@ def helper_with_default(klass, folder, shots, ways, shuffle=True,
         kwargs['class_augmentations'] = defaults.get('class_augmentations', None)
     if test_shots is None:
         test_shots = shots
-    print(kwargs, klass)
+
     dataset = klass(folder, num_classes_per_task=ways, **kwargs)
     dataset = ClassSplitter(dataset, shuffle=shuffle,
         num_train_per_class=shots, num_test_per_class=test_shots)
