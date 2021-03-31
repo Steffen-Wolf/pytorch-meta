@@ -62,10 +62,12 @@ class FastClassDataset(ClassDataset):
             gt_key = self.folders["gt_segmentation"][1]
             gt_segmentation = gt_zarr[gt_key][:]
 
-            emb_zarr = zarr.open(
-                self.folders["embedding"][0], "r")
-            emb_key = self.folders["embedding"][1]
-            emb_segmentation = emb_zarr[emb_key][0]
+            emb_segmentation = []
+            for ef in self.folders["embedding"]:
+                emb_zarr = zarr.open(ef[0], "r")
+                emb_key = ef[1]
+                emb_segmentation.append(emb_zarr[emb_key][0])
+            emb_segmentation = np.concatenate(emb_segmentation, axis=0)
 
             x = np.arange(gt_segmentation.shape[-1], dtype=np.float32)
             y = np.arange(gt_segmentation.shape[-2], dtype=np.float32)
