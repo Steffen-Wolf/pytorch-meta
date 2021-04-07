@@ -56,6 +56,10 @@ class FastClassDataset(ClassDataset):
     def num_classes(self):
         return len(self.data)
 
+    def duplicate_and_interpolate(self, embeddings):
+        mixed = embeddings[np.random.permutation(len(embeddings))]
+        return np.concatenate((embeddings, (embeddings + mixed) / 2), axis=0)
+
     def extract_data(self):
         gt_zarr = zarr.open(
             self.folders["gt_segmentation"][0], "r")
@@ -83,31 +87,37 @@ class FastClassDataset(ClassDataset):
         bg_mask = gt_segmentation == 0
         for idx in np.unique(gt_segmentation):
             mask = gt_segmentation == idx
-            if mask.sum() > self.folders["min_samples"]:
-                instance_embedding = np.transpose(emb_segmentation[:, mask])
-                instance_embedding = instance_embedding.astype(np.float32)
-                self._data.append(instance_embedding)
-                if idx == 0:
-                    # we assume that the background instance is
-                    # always at index zero
-                    self._semantic_class.append(0)
-                else:
-                    self._semantic_class.append(1)
+            instance_embedding = np.transpose(emb_segmentation[:, mask])
+            instance_embedding = instance_embedding.astype(np.float32)
+            
+            if len(instance_embedding) <= 1:
+                continue
 
-                    # add a background instance in close proximity to the object
-                    background_distance = distance_transform_edt(
-                        gt_segmentation != idx)
-                    bg_close_to_instance_mask = np.logical_and(background_distance < self.folders["bg_distance"],
-                                                            bg_mask)
-                    if bg_close_to_instance_mask.sum() > self.folders["min_samples"]:
-                        bg_instance_embedding = np.transpose(
-                            emb_segmentation[:, bg_close_to_instance_mask])
-                        bg_instance_embedding = bg_instance_embedding.astype(np.float32)
-                        self._data.append(bg_instance_embedding)
-                        self._semantic_class.append(0)
+            while len(instance_embedding) < self.folders["min_samples"]:
+                print("extending", len(instance_embedding))
+                instance_embedding = self.duplicate_and_interpolate(instance_embedding)
+                print("to ", len(instance_embedding))
 
+            self._data.append(instance_embedding)
+            if idx == 0:
+                # we assume that the background instance is
+                # always at index zero
+                self._semantic_class.append(0)
             else:
-                print("skipping", idx, mask.sum())
+                self._semantic_class.append(1)
+
+                # add a background instance in close proximity to the object
+                background_distance = distance_transform_edt(
+                    gt_segmentation != idx)
+                bg_close_to_instance_mask = np.logical_and(background_distance < self.folders["bg_distance"],
+                                                        bg_mask)
+                bg_instance_embedding = np.transpose(
+                    emb_segmentation[:, bg_close_to_instance_mask])
+                bg_instance_embedding = bg_instance_embedding.astype(np.float32)
+
+                if bg_close_to_instance_mask.sum() > self.folders["min_samples"]:
+                    self._data.append(bg_instance_embedding)
+                    self._semantic_class.append(0)
 
     @property
     def data(self):
