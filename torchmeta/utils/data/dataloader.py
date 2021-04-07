@@ -22,7 +22,6 @@ class BatchMetaCollate(object):
             return OrderedDict([(key, self.collate_task(subtask))
                 for (key, subtask) in task.items()])
         else:
-            print(task, type(task))
             raise NotImplementedError()
 
     def __call__(self, batch):
