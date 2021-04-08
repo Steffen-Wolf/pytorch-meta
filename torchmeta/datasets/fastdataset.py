@@ -38,8 +38,8 @@ class FastClassDataset(ClassDataset):
         self._data = None
         self._semantic_class = None
         # trigger the data loading immediately
-        self.data
-
+        self.cache = zarr.open(self.folders["cache"], "a")
+        self.fill_cache()
 
     def __getitem__(self, index):
         """
@@ -48,112 +48,127 @@ class FastClassDataset(ClassDataset):
         """
         transform = self.get_transform(index, self.transform)
         target_transform = self.get_target_transform(index)
-
-        return FastDataset(self.data[index], index, self.semantic_class[index],
+        root_idx = self.folders["index"]
+        cache_file = self.folders["cache"]
+        embeddig_key = f"{root_idx}/{index}/embedding"
+        semantic_key = f"{root_idx}/{index}/semantic_class"
+        target = index
+        return FastDataset(cache_file, embeddig_key, semantic_key, target,
                            transform=transform, target_transform=target_transform)
 
     @property
     def num_classes(self):
-        return len(self.data)
+        return len(self.cache[self.folders["index"]])
 
     def duplicate_and_interpolate(self, embeddings):
         mixed = embeddings[np.random.permutation(len(embeddings))]
         return np.concatenate((embeddings, (embeddings + mixed) / 2), axis=0)
 
-    def extract_data(self):
-        gt_zarr = zarr.open(
-            self.folders["gt_segmentation"][0], "r")
-        gt_key = self.folders["gt_segmentation"][1]
-        gt_segmentation = gt_zarr[gt_key][:]
+    def fill_cache(self):
 
-        emb_segmentation = []
-        for ef in self.folders["embedding"]:
-            emb_zarr = zarr.open(ef[0], "r")
-            emb_key = ef[1]
-            emb_segmentation.append(emb_zarr[emb_key][0])
-        emb_segmentation = np.concatenate(emb_segmentation, axis=0)
+        root_idx = self.folders["index"]
+        if root_idx not in self.cache:
+            gt_zarr = zarr.open(self.folders["gt_segmentation"][0], "r")
+            gt_key = self.folders["gt_segmentation"][1]
+            gt_segmentation = gt_zarr[gt_key][:]
 
-        x = np.arange(gt_segmentation.shape[-1], dtype=np.float32)
-        y = np.arange(gt_segmentation.shape[-2], dtype=np.float32)
+            emb_segmentation = []
+            for ef in self.folders["embedding"]:
+                emb_zarr = zarr.open(ef[0], "r")
+                emb_key = ef[1]
+                emb_segmentation.append(emb_zarr[emb_key][0])
+            emb_segmentation = np.concatenate(emb_segmentation, axis=0)
 
-        coords = np.meshgrid(x, y, copy=True)
-        emb_segmentation = np.concatenate([coords[0:1],
-                                            coords[1:2],
-                                            emb_segmentation], axis=0)
+            x = np.arange(gt_segmentation.shape[-1], dtype=np.float32)
+            y = np.arange(gt_segmentation.shape[-2], dtype=np.float32)
 
-        self._data = []
-        self._semantic_class = []
+            coords = np.meshgrid(x, y, copy=True)
+            emb_segmentation = np.concatenate([coords[0:1],
+                                                coords[1:2],
+                                                emb_segmentation], axis=0)
 
-        bg_mask = gt_segmentation == 0
-        for idx in np.unique(gt_segmentation):
-            mask = gt_segmentation == idx
-            instance_embedding = np.transpose(emb_segmentation[:, mask])
-            instance_embedding = instance_embedding.astype(np.float32)
-            
-            if len(instance_embedding) <= 1:
-                continue
+            instance_idx = 0
+            bg_mask = gt_segmentation == 0
+            for idx in np.unique(gt_segmentation):
+                mask = gt_segmentation == idx
+                instance_embedding = np.transpose(emb_segmentation[:, mask])
+                instance_embedding = instance_embedding.astype(np.float32)
+                
+                if len(instance_embedding) <= 1:
+                    continue
 
-            while len(instance_embedding) < self.folders["min_samples"]:
-                print("extending", len(instance_embedding))
-                instance_embedding = self.duplicate_and_interpolate(instance_embedding)
-                print("to ", len(instance_embedding))
+                while len(instance_embedding) < self.folders["min_samples"]:
+                    print("extending", len(instance_embedding))
+                    instance_embedding = self.duplicate_and_interpolate(instance_embedding)
+                    print("to ", len(instance_embedding))
 
-            self._data.append(instance_embedding)
-            if idx == 0:
-                # we assume that the background instance is
-                # always at index zero
-                self._semantic_class.append(0)
-            else:
-                self._semantic_class.append(1)
 
-                # add a background instance in close proximity to the object
-                background_distance = distance_transform_edt(
-                    gt_segmentation != idx)
-                bg_close_to_instance_mask = np.logical_and(background_distance < self.folders["bg_distance"],
-                                                        bg_mask)
-                bg_instance_embedding = np.transpose(
-                    emb_segmentation[:, bg_close_to_instance_mask])
-                bg_instance_embedding = bg_instance_embedding.astype(np.float32)
+                if idx == 0:
+                    # we assume that the background instance is
+                    # always at index zero
+                    # randomly subsample background pixels
+                    p_subsample = 0.05
+                    subsampeling_mask = np.random.rand(len(instance_embedding)) < p_subsample
+                    ssdata = instance_embedding[subsampeling_mask]
+                    self.cache.create_dataset(
+                        f"{root_idx}/{instance_idx}/embedding", data=ssdata, compressor=None, chunks=(16, ssdata.shape[1]))
+                    self.cache.create_dataset(
+                        f"{root_idx}/{instance_idx}/semantic_class", data=[0], compressor=None)
+                    instance_idx += 1
+                else:
+                    self.cache.create_dataset(
+                        f"{root_idx}/{instance_idx}/embedding", data=instance_embedding, compressor=None, chunks=(16, instance_embedding.shape[1]))
+                    self.cache.create_dataset(
+                        f"{root_idx}/{instance_idx}/semantic_class", data=[1], compressor=None)
+                    instance_idx += 1
 
-                if bg_close_to_instance_mask.sum() > self.folders["min_samples"]:
-                    self._data.append(bg_instance_embedding)
-                    self._semantic_class.append(0)
+                    # add a background instance in close proximity to the object
+                    background_distance = distance_transform_edt(
+                        gt_segmentation != idx)
+                    bg_close_to_instance_mask = np.logical_and(background_distance < self.folders["bg_distance"],
+                                                            bg_mask)
+                    bg_instance_embedding = np.transpose(
+                        emb_segmentation[:, bg_close_to_instance_mask])
+                    bg_instance_embedding = bg_instance_embedding.astype(np.float32)
 
-    @property
-    def data(self):
-        if self._data is None:
-            self.extract_data()
-        return self._data
-
-    @property
-    def semantic_class(self):
-        if self._semantic_class is None:
-            self.extract_data()
-        return self._semantic_class
-
-    @property
-    def labels(self):
-        if self._labels is None:
-            with open(self.split_filename_labels, 'r') as f:
-                self._labels = json.load(f)
-        return self._labels
+                    if bg_close_to_instance_mask.sum() > self.folders["min_samples"]:
+                        self.cache.create_dataset(
+                            f"{root_idx}/{instance_idx}/embedding", data=bg_instance_embedding, compressor=None, chunks=(16, instance_embedding.shape[1]))
+                        self.cache.create_dataset(
+                            f"{root_idx}/{instance_idx}/semantic_class", data=[0], compressor=None)
+                        instance_idx += 1
 
 
 class FastDataset(Dataset):
-    def __init__(self, data, target, semantic_class,
+    def __init__(self, cache_file, embeddig_key, semantic_key, target,
                  transform=None, target_transform=None):
         super(FastDataset, self).__init__(target, transform=transform,
                                               target_transform=target_transform)
+        self.embeddig_key = embeddig_key
+        self.semantic_key = semantic_key
+        self.cache_file = cache_file
+        self.cache = zarr.open(cache_file, "r")
+        # self.data = self.cache[self.embeddig_key][:]
+        self.semantic_class = self.cache[self.semantic_key][0]
+        # cache.close()
         self.target = target
-        self.semantic_class = semantic_class
-        self.data = data
+        self._length = None
 
     def __len__(self):
-        return len(self.data)
+        if self._length is None:
+            self._length = self.cache[self.embeddig_key].shape[0]
+            # cache.close()
+        return self._length
+
 
     def __getitem__(self, index):
         target = self.target
-        embedding = self.data[index]
+        # embedding = self.data[index]
+        # cache = zarr.open(self.cache_file, "r")
+        embedding = self.cache[self.embeddig_key][index]
+        # cache.close()
+        # print(embedding.shape)
+        semantic_class = self.semantic_class
 
         if self.transform is not None:
             embedding = self.transform(embedding)
@@ -161,4 +176,4 @@ class FastDataset(Dataset):
         if self.target_transform is not None:
             target = self.target_transform(target)
 
-        return embedding, target, self.semantic_class
+        return embedding, target, semantic_class
